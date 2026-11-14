@@ -1,0 +1,58 @@
+{
+  "records": [
+    {
+      "id": "A",
+      "registry_id": "R1",
+      "city": "North Town",
+      "postal": "A1",
+      "street": "Maple Road",
+      "building": "12",
+      "unit": "02"
+    },
+    {
+      "id": "B",
+      "registry_id": null,
+      "city": "North Town",
+      "postal": "A1",
+      "street": "\uff2d\uff21\uff30\uff2c\uff25  ROAD",
+      "building": "12",
+      "unit": "02"
+    },
+    {
+      "id": "C",
+      "registry_id": "R2",
+      "city": "North Town",
+      "postal": "A1",
+      "street": "Maple Road",
+      "building": "12",
+      "unit": "03"
+    },
+    {
+      "id": "D",
+      "registry_id": "R3",
+      "city": "North Town",
+      "postal": "A1",
+      "street": "Maple Road",
+      "building": "12",
+      "unit": "03"
+    },
+    {
+      "id": "E",
+      "registry_id": null,
+      "city": "North Town",
+      "postal": "A1",
+      "street": "Maple Road",
+      "building": "12",
+      "unit": null
+    },
+    {
+      "id": "F",
+      "registry_id": null,
+      "city": "North Town",
+      "postal": "A1",
+      "street": "Maple Road",
+      "building": "12",
+      "unit": null
+    }
+  ]
+}
