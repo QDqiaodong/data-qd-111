@@ -27,6 +27,29 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
+## 历史维表（address-history）
+
+`address-history` 把正常归并报告中的 `normalized_records` 导入 SQLite，按原样源 ID
+维护左闭右开版本区间，并可导出任意已提交版本的快照。它不接受 `--audit-only` 诊断报告，
+不落库 `group_id`，也不把分组当作持久身份。
+
+```sh
+.venv/bin/address-link --source fixtures/addresses.json --output run/report.json
+.venv/bin/address-history import --database run/history.sqlite3 \
+  --report run/report.json --version 1
+.venv/bin/address-history as-of --database run/history.sqlite3 \
+  --version 1 --output run/snapshot-v1.json
+```
+
+`import` 只以规范化后的 `city`/`postal`/`street`/`building`/`unit` 与原样 `registry_id`
+判断六字段是否变化：未变不增行，变化关闭旧区间并以新版本新开，消失关闭，重现新开，
+空批次关闭全部。新版本必须严格大于已提交最大版本；同版本再次导入时，六字段投影
+（按 ID 排序）完全相同则幂等，不同则拒绝。版本登记与区间修改在同一事务内完成，
+校验或写入失败不留下部分版本。`as-of` 对未知版本退出 2 并保留旧输出；导出记录按
+原样 ID 升序，仅含 ID 与六字段。库 API：`address_link.history.import_report(...)`
+与 `address_link.history.as_of(...)`。区间与完整口径见
+[docs/contract.md](docs/contract.md)。
+
 人工裁决为可选项，传入只含 `same`、`different` 的 JSON 文件（值为源ID二元组数组）：
 
 ```sh
@@ -80,5 +103,7 @@ JSON 语法/重复键、根结构错误和输入上限仍整批失败（退出 2
 ## 已有能力与样例结果
 
 6条地址形成4组：A/B经Unicode规范化匹配；C/D因官方ID冲突进入review；未知单元的E/F保持独立。
-`link.py`构建候选索引、并查集与裁决约束，`audit.py`提供导入前逐行诊断，`pipeline.py`衔接输入，`io.py`负责契约及原子报告，CLI供离线批处理使用。
-当前没有模糊匹配或跨批次稳定实体ID；人工裁决支持 same/different 约束与阻挡审计，后续可按真实业务演进。
+`link.py`构建候选索引、并查集与裁决约束，`audit.py`提供导入前逐行诊断，`history.py`维护
+SQLite 版本历史，`pipeline.py`衔接输入，`io.py`负责契约及原子报告，两个 CLI 供离线批处理使用。
+当前没有模糊匹配；人工裁决支持 same/different 约束与阻挡审计，历史维表以原样源 ID 跨批次
+保留六字段快照，后续可按真实业务演进。

@@ -38,6 +38,7 @@ same 与 different，一律拒绝（退出2，旧报告不变）。
 不含 `decision_audit` 字段。
 
 当前没有跨批次持久ID、概率模型或增量索引。未来演进须有实际来源与误合并证据。
+跨批次历史见下节 `address-history`（以原样源 ID 为身份，不使用 `group_id`）。
 
 ## 导入前质量诊断（`--audit-only`）
 
@@ -88,3 +89,73 @@ audit_only=True)`）只读源文件并写出诊断报告。它不建候选边、
 读取或写入失败退出2 且旧报告原样保留。该模式只诊断单行契约，不判断跨行语义（除重复
 ID 外），不推断国家、不做模糊匹配，也不替代正式链接的冲突裁决。默认模式与有效数据的
 输出结构、字段和排序均不变。
+
+## 历史维表（`address-history`）
+
+`address-history` 把正常归并报告中的 `normalized_records` 持久化为 SQLite 历史维表，
+并以 `as-of` 导出任意已提交版本的快照。它只消费 `normalized_records`；其他报告字段
+（`groups`、`evidence_edges`、`decision_audit`）不参与持久化。`--audit-only` 的诊断报告
+不含 `normalized_records`，因而不被接受。报告读取沿用 `io.load` 的整批契约（最多 8 MB、
+拒绝重复键与非有限数字）。
+
+### 输入契约
+
+只接受**正常归并报告**（`address-link` 的默认输出或带 `--decisions` 的输出）：
+
+- 报告必须是 JSON 对象且含 `normalized_records` 数组；
+- 出现诊断报告标志键（`valid_count`/`problem_count`/`rule_counts`/`rows`）即拒绝；
+- 每条记录恰含 `id`、`registry_id`、`city`、`postal`、`street`、`building`、`unit`、
+  `normalized` 八个字段；`normalized` 恰含 `city`、`postal`、`street`、`building`、`unit`；
+- `id` 为非空文本（最多 256 字符、无控制字符）且全批唯一（精确字符串，不做规范化）；
+  `registry_id` 为 `null` 或原样非空文本；`city`/`postal`/`street`/`building` 为必填文本；
+- 四条地址字段与 `unit` 的规范化值必须与报告给出的 `normalized` 一致，即重新执行
+  NFKC、casefold、标点转空格、压缩空白后逐项相等；地址项规范化后不得为空，`unit`
+  可为 `null`，但非 `null` 时规范化后不得为空。
+
+任一条不满足即整批拒绝，不创建、不修改数据库（退出2）；空 `normalized_records` 是
+合法的空批次。
+
+### 数据库与身份
+
+SQLite 使用两张表：`history_version(version, projection)` 记录已提交版本及其确定性
+六字段投影，`history_interval` 保存区间行。**持久身份是原样源 ID**（`id` 原文，不做
+规范化）；`group_id` 不落库、不作身份，导出也不含它。每条记录的六字段为
+`registry_id`（原样）加规范化后的 `city`、`postal`、`street`、`building`、`unit`。
+
+### 版本与区间
+
+- 版本必须是正整数（`bool` 与字符串拒绝），新版本严格大于当前最大已提交版本；
+- 版本区间左闭右开：`version_from <= v < version_to`，开放区间在 `version_to` 存 `NULL`；
+- 导入版本 `v` 时，对每条记录：不存在开放区间则新开 `[v, NULL)`；六字段变化则关闭旧
+  区间（`version_to = v`）并以新值新开 `[v, NULL)`；六字段未变则不写行、不新开区间；
+- 某 ID 在快照中消失则以 `v` 关闭其开放区间；重现时以重现版本新开区间，不复用旧行；
+- 空批次有效：关闭全部开放区间，版本仍登记且可 `as-of` 导出空 `records`；
+- 版本号允许有空洞；查询版本必须已登记才可导出，`as-of` 不做区间推断。快照完全由
+  区间谓词 `version_from <= v AND (version_to IS NULL OR version_to > v)` 决定。
+
+### 幂等与冲突
+
+同一版本重复导入：先把该版本的六字段按 ID 排序序列化为规范投影，逐字节比较。
+投影相同则幂等（不再写行，返回 `idempotent: true`）；不同则拒绝（退出2，已提交状态
+不变）。记录在报告数组中的顺序不影响投影或身份。
+
+### 事务
+
+校验（版本、报告结构、字段、唯一 ID、规范化一致性）全部发生在打开数据库之前。
+新版本的区间关闭/开启与 `history_version` 登记在同一 `BEGIN IMMEDIATE` 事务中，
+任一步失败整体 `ROLLBACK`：不留下版本登记，也不留下部分区间修改。`as-of` 以只读
+模式打开数据库，不写文件。
+
+### CLI
+
+```sh
+address-history import --database history.sqlite3 --report report.json --version 1
+address-history as-of  --database history.sqlite3 --version 1 --output snapshot.json
+```
+
+`import` 成功时向 stdout 打印 `{"version", "record_count", "idempotent", "opened", "closed"}`。
+`as-of` 导出 `{"version", "record_count", "records"}`，`records` 按原样 `id` 升序，
+每项恰含 `id` 与六字段。未知版本、数据库不存在或无效参数退出2；`as-of` 通过同目录
+临时文件原子替换写出，失败时已有输出文件原样保留。库 API 为
+`address_link.history.import_report(database, report_path, version)` 与
+`address_link.history.as_of(database, version)`。
