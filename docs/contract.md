@@ -38,3 +38,53 @@ same 与 different，一律拒绝（退出2，旧报告不变）。
 不含 `decision_audit` 字段。
 
 当前没有跨批次持久ID、概率模型或增量索引。未来演进须有实际来源与误合并证据。
+
+## 导入前质量诊断（`--audit-only`）
+
+`address-link --source S --output O --audit-only`（库 API：`address_link.audit.audit(data)`、
+`address_link.pipeline.audit(path)` 与 `address_link.pipeline.run(path, decisions_path=None,
+audit_only=True)`）只读源文件并写出诊断报告。它不建候选边、不分组、不规范化输出记录，
+也不改变默认模式（含 `--decisions`）的任何结果与字段。`--audit-only` 与 `--decisions`
+互斥，同时给出即参数错误（退出2，旧报告不变）。
+
+**整批失败（不写报告，退出2，旧报告保留）**：输入超过 8 MB；JSON 语法错误、重复键或
+非有限数字；根不是恰含 `records` 的对象；`records` 不是数组或超过 100000 条。这些在
+逐行诊断之前由同一 `io.load` 契约抛出。
+
+**逐行检查**：对 `records` 每个元素收集全部独立问题，不因某行有错就停止。
+
+| 规则码 | 含义 |
+| --- | --- |
+| `record_not_object` | 行不是 JSON 对象（其余行级检查跳过） |
+| `missing_fields` | 缺少 `id`、`registry_id`、`city`、`postal`、`street`、`building`、`unit` 中的键 |
+| `unexpected_fields` | 出现七个契约字段以外的键 |
+| `<field>_empty` | 字符串去空白后为空，或不可空字段（`id`、四项地址）为 JSON null；`registry_id`/`unit` 的 null 合法 |
+| `<field>_not_text` | 该值不是字符串 |
+| `<field>_too_long` | 字符串长度超过 256 个码点 |
+| `<field>_control_char` | 含码点小于 32 的控制字符 |
+| `<field>_empty_normalized` | 仅 `city`/`postal`/`street`/`building`/`unit`；去空白后原文非空，但按链接契约的 NFKC、casefold、标点转空格、压缩空白后为空（如纯标点、软连字符）；可与 `_too_long`、`_control_char` 同时出现 |
+| `id_duplicate` | 与其他行共享完全相同的原始 `id` 字符串 |
+
+值级检查彼此独立：一个值可同时命中 `_too_long` 与 `_control_char`。去空白后为空的字符串
+只记 `_empty`，不再重复记 `_empty_normalized`（两者是同一底层问题）；去空白后非空即评估
+`_empty_normalized`，因此该码可与 `_too_long`、`_control_char` 同时出现。`registry_id`
+与 `id` 是不透明字符串，不做 NFKC 或大小写折叠；`id` 也不做规范化，重复按精确字符串
+判定，每个涉及的行（含首次出现）都标记 `id_duplicate`。`unit` 允许 null（未知单元），
+不记 `unit_empty`。
+
+**报告结构**（默认按 `sort_keys` 输出）：
+
+- `record_count`：源 `records` 行数，包括有问题的行。
+- `valid_count`：无任何规则码的行数。
+- `problem_count`：至少有一个规则码的行数；`valid_count + problem_count = record_count`。
+- `rule_counts`：规则码到覆盖行数的映射（同一行中同一码只计一次，因此其和可大于
+  `problem_count`）；无问题时为空对象。
+- `rows`：只含有问题的行，按源数组下标升序。每项为 `{"index": 下标, "rule_codes": [...]}`，
+  `index` 为源数组下标（0 起，不是 ID 排序位置），`rule_codes` 在该行内按字典序去重排列。
+  无问题时 `rows` 为空数组。
+
+行与码的顺序只由源数组下标和码字符串决定，与输入 ID、map 顺序或重新排列无关；同一
+输入字节的重复运行报告逐字节一致。诊断输出与普通报告一样经同目录临时文件原子替换；
+读取或写入失败退出2 且旧报告原样保留。该模式只诊断单行契约，不判断跨行语义（除重复
+ID 外），不推断国家、不做模糊匹配，也不替代正式链接的冲突裁决。默认模式与有效数据的
+输出结构、字段和排序均不变。

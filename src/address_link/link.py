@@ -3,9 +3,13 @@ from collections import defaultdict
 import re, unicodedata
 from .io import fields, text, array
 
-def normalize(value):
-    value=unicodedata.normalize('NFKC',text(value)).casefold()
+def normalized_text(value):
+    """The shared NFKC/casefold/punctuation/whitespace transform of the contract."""
+    value=unicodedata.normalize('NFKC',value).casefold()
     return ' '.join(re.sub(r'[^\w\s]',' ',value).split())
+
+def normalize(value):
+    return normalized_text(text(value))
 
 def _validate_decisions(decisions,known_ids):
     """Return canonical (same, different) pair tuples, sorted and de-duplicated."""

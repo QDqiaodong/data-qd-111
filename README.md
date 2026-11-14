@@ -23,6 +23,7 @@ python3 -m venv .venv
 
 ```sh
 .venv/bin/address-link --source fixtures/addresses.json --output run/report.json
+.venv/bin/address-link --source fixtures/addresses.json --output run/audit.json --audit-only
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -47,10 +48,37 @@ review。报告新增 `decision_audit` 接纳/阻挡证据；不传 `--decisions
 不对正在被其他进程写入的输出运行；不承诺文件系统断电恢复或在线并发发布。
 修改源码后需重新安装。`run/`、`.venv/` 与构建产物均不入 Git。
 
+## 导入前质量诊断（可选 --audit-only）
+
+`--audit-only` 只逐行生成诊断报告，不建候选边、不分组，也不会改变默认
+`address-link` 的输出。操作员可在正式导入前一次定位整批 `records` 的契约问题：
+字段集、`id` 的空值/超长/非文本/重复、`registry_id`、四项地址必填项与 `unit`，
+包括 NFKC 规范化后为空的地址/单元（如纯标点、软连字符）。每行收集全部独立问题。
+
+```sh
+.venv/bin/address-link --source fixtures/addresses.json --output run/audit.json --audit-only
+```
+
+报告为 `record_count`、`valid_count`、`problem_count`、`rule_counts` 与 `rows`。
+`rows` 只含有问题的行，按源数组下标（0 起，不按 ID 排序）稳定排列，`index` 为下标、
+`rule_codes` 为该行升序去重的规则码；重复 ID 的所有相关行都标 `id_duplicate`。
+`rule_counts` 为各码覆盖的行数。示例：
+
+```json
+{"record_count": 3, "valid_count": 1, "problem_count": 2,
+ "rule_counts": {"id_duplicate": 2, "postal_empty": 1},
+ "rows": [{"index": 0, "rule_codes": ["id_duplicate"]},
+          {"index": 1, "rule_codes": ["id_duplicate", "postal_empty"]}]}
+```
+
+JSON 语法/重复键、根结构错误和输入上限仍整批失败（退出 2、旧报告不变）；
+报告同样原子替换。`--audit-only` 不能与 `--decisions` 同时使用。规则码与边界见
+[docs/contract.md](docs/contract.md)。
+
 样例来源见 fixtures/DATA-SOURCES.md。代码与自制样例 MIT；没有正式题面、评测答案或内部编排代码。
 
 ## 已有能力与样例结果
 
 6条地址形成4组：A/B经Unicode规范化匹配；C/D因官方ID冲突进入review；未知单元的E/F保持独立。
-`link.py`构建候选索引、并查集与裁决约束，`pipeline.py`衔接输入，`io.py`负责契约及原子报告，CLI供离线批处理使用。
+`link.py`构建候选索引、并查集与裁决约束，`audit.py`提供导入前逐行诊断，`pipeline.py`衔接输入，`io.py`负责契约及原子报告，CLI供离线批处理使用。
 当前没有模糊匹配或跨批次稳定实体ID；人工裁决支持 same/different 约束与阻挡审计，后续可按真实业务演进。

@@ -10,12 +10,14 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--decisions',type=Path,default=None,
                    help='JSON object with only same and different, each a list of source-id pairs')
+    p.add_argument('--audit-only',action='store_true',
+                   help='write a per-row pre-import quality report; never build edges or groups')
     a=p.parse_args()
     try:
         if a.source.resolve()==a.output.resolve(): raise ValueError('source and output must differ')
         if a.decisions is not None and a.decisions.resolve()==a.output.resolve():
             raise ValueError('decisions and output must differ')
-        result=run(a.source,a.decisions);publish(a.output,result)
+        result=run(a.source,a.decisions,a.audit_only);publish(a.output,result)
     except (ValueError,OSError,KeyError,TypeError,OverflowError,RecursionError) as e:
         print(str(e),file=sys.stderr);return 2
     print(json.dumps(result,ensure_ascii=False,sort_keys=True,allow_nan=False));return 0
