@@ -98,12 +98,36 @@ JSON 语法/重复键、根结构错误和输入上限仍整批失败（退出 2
 报告同样原子替换。`--audit-only` 不能与 `--decisions` 同时使用。规则码与边界见
 [docs/contract.md](docs/contract.md)。
 
+## 配送结算事件事实（delivery-facts）
+
+`delivery-facts ingest` 读取 JSONL 结算事件与**已有**的 `address-history` 维表，把每个
+事件按当时有效的六字段固化进独立 SQLite 事实库；`summary` 按 `city`、`postal` 排序汇总
+事件数与分币金额。完整口径见 [docs/contract.md](docs/contract.md)。
+
+```sh
+.venv/bin/delivery-facts ingest --database run/facts.sqlite3 \
+  --events events.jsonl --history run/history.sqlite3
+.venv/bin/delivery-facts summary --database run/facts.sqlite3 --output run/summary.json
+```
+
+每行事件恰含 `event_id`、`source_id`、`version`、`cents`；ID 沿用原样文本规则，`version`
+为正整数（拒绝布尔值），`cents` 为有符号 64 位整数（拒绝布尔值、浮点与字符串）。空行忽略。
+入库前一次性读取维表：读取当时有效源 ID 的六字段属性并固化，未知版本或当时不存在的 ID
+整批拒绝（退出2，事实库不变）。维表以只读方式打开，单读事务给整批一致快照，不写源库；
+归属按源 ID 的版本区间做二分，不逐事件扫描全部区间。
+
+`event_id` 全局唯一：同内容重投幂等（返回 `idempotent` 计数），异内容冲突整批回滚，批内
+重复与跨批重投都覆盖；一次入库的所有事实在同一事务提交，失败不留部分事实。`summary`
+用精确整数求和，允许超过 64 位。库 API：`address_link.delivery.ingest(database,
+events_path, history_database)` 与 `address_link.delivery.summary(database)`。
+
 样例来源见 fixtures/DATA-SOURCES.md。代码与自制样例 MIT；没有正式题面、评测答案或内部编排代码。
 
 ## 已有能力与样例结果
 
 6条地址形成4组：A/B经Unicode规范化匹配；C/D因官方ID冲突进入review；未知单元的E/F保持独立。
 `link.py`构建候选索引、并查集与裁决约束，`audit.py`提供导入前逐行诊断，`history.py`维护
-SQLite 版本历史，`pipeline.py`衔接输入，`io.py`负责契约及原子报告，两个 CLI 供离线批处理使用。
-当前没有模糊匹配；人工裁决支持 same/different 约束与阻挡审计，历史维表以原样源 ID 跨批次
-保留六字段快照，后续可按真实业务演进。
+SQLite 版本历史，`delivery.py`把结算事件固化为事实并按城市/邮编汇总，`pipeline.py`衔接
+输入，`io.py`负责契约及原子报告，三个 CLI 供离线批处理使用。当前没有模糊匹配；人工裁决
+支持 same/different 约束与阻挡审计，历史维表以原样源 ID 跨批次保留六字段快照，配送事实
+按事件版本归属并可幂等重投，后续可按真实业务演进。

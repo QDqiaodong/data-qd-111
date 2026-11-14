@@ -159,3 +159,90 @@ address-history as-of  --database history.sqlite3 --version 1 --output snapshot.
 临时文件原子替换写出，失败时已有输出文件原样保留。库 API 为
 `address_link.history.import_report(database, report_path, version)` 与
 `address_link.history.as_of(database, version)`。
+
+## 配送结算事件事实（`delivery-facts`）
+
+`delivery-facts` 把配送结算事件按事件版本归属到 `address-history` 维表，固化当时有效的
+六字段属性，写入**独立**的 SQLite 事实库；`summary` 按 `city`、`postal` 排序汇总事件数
+与分币金额。事实库与历史库完全分离，源维表只读。
+
+```sh
+delivery-facts ingest  --database facts.sqlite3 --events events.jsonl --history history.sqlite3
+delivery-facts summary --database facts.sqlite3 --output summary.json
+```
+
+库 API：`address_link.delivery.ingest(database, events_path, history_database)` 与
+`address_link.delivery.summary(database)`。
+
+### 事件输入
+
+`ingest` 读取 JSONL：每行一个 JSON 对象，恰含 `event_id`、`source_id`、`version`、
+`cents` 四个字段；空行（含末尾换行）忽略，其余每行必须是完整对象。JSON 解析沿用
+`io.loads` 的契约（拒绝重复键与非有限数字），错误信息带 1 起的行号。最多 100000 个
+非空事件行。
+
+- `event_id`、`source_id`：沿用 `io.text` 的原样文本规则——非空（去空白后非空）、最多
+  256 码点、无码点小于 32 的控制字符；不做 NFKC 或大小写折叠。
+- `version`：正整数，`1 <= version <= 2**63-1`；`bool`、浮点与字符串拒绝。
+- `cents`：有符号 64 位整数，`-2**63 <= cents <= 2**63-1`；`bool`（`true`/`false`）、
+  浮点、字符串与越界整数拒绝。
+
+任一行不满足即整批拒绝（退出2，事实库不变）。`source_id` 是原样文本，与维表的持久
+身份 `id` 精确匹配。
+
+### 归属与快照
+
+- 入库前以**只读**方式打开历史库（`mode=ro`），在单个读事务中读取已登记版本集合，
+  并一次性取出整批涉及的源 ID 区间；整批观察同一已提交快照，不写源库。
+- 每条事件用其 `version` 在对应 `source_id` 的区间中二分定位
+  `version_from <= version < version_to`，取该区间固化的六字段
+  （`registry_id`、`city`、`postal`、`street`、`building`、`unit`）。
+  不逐事件扫描全部区间。
+- 事件的 `version` 必须是历史库已登记的版本；否则整批拒绝。
+- `source_id` 在该版本必须存在（存在覆盖该版本的区间）；否则整批拒绝。
+  不存在、尚未出现或已消失都按“当时不存在”处理。
+- 若维表对某个 `source_id` 存在重叠区间（如被外部篡改），归属不唯一，整批拒绝。
+- 固化的六字段写入事实行，之后维表演进不影响已结算事实。
+
+### 事实库
+
+SQLite 表 `delivery_fact(event_id, source_id, version, cents, registry_id, city,
+postal, street, building, unit)`，`event_id` 为主键。事件的读取、校验与归属都在打开
+事实库之前完成，失败时不创建事实库；写入阶段的失败整体回滚，不留下任何事实或半批。
+
+### 幂等、冲突与事务
+
+- `event_id` 全局唯一，唯一性作用于整库，不限于单批。
+- 同 `event_id` 且固化内容（`source_id`、`version`、`cents` 与六字段）完全一致视为重投，
+  幂等跳过并计入返回的 `idempotent` 数。
+- 同 `event_id` 但内容不同视为冲突：整批拒绝（退出2），已提交事实不变。批内重复使用
+  相同 ID 但内容不同属于冲突；内容相同则在批内先去重。
+- 所有待插入事实在单个 `BEGIN IMMEDIATE` 事务中提交；任一步失败整体 `ROLLBACK`，
+  不留下部分事实，也不留下半批。
+- `ingest` 成功时向 stdout 打印 `{"event_count", "inserted", "idempotent"}`：
+  `event_count` 为批内去重后的事件数，`inserted` 为新写入行数，`idempotent` 为跳过的
+  重投数。
+
+### 汇总
+
+`summary` 以只读方式读取整张事实表，按固化后的 `city`、`postal`（均为规范化文本）分组，
+按 `(city, postal)` 升序输出：
+
+- `event_count`：库内事实总数；
+- `cents`：全部事实的分币总额；
+- `group_count`：分组数；
+- `groups`：每项 `{"city", "postal", "event_count", "cents"}`，按 `(city, postal)` 升序。
+
+金额以 Python 整数逐行累加，结果精确，可超过有符号 64 位而不溢出或丢精度。
+`summary` 通过同目录临时文件原子替换写出，失败时已有输出原样保留。事实库或事实表
+不存在、未知参数退出2。
+
+### CLI
+
+```sh
+delivery-facts ingest --database F --events E --history H
+delivery-facts summary --database F --output O
+```
+
+`ingest` 要求 `--database` 与 `--history`、`--events` 均不同；`summary` 要求
+`--output` 与 `--database` 不同。两者失败均退出2。

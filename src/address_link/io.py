@@ -8,11 +8,15 @@ def pairs(items):
         result[k]=v
     return result
 
+def loads(raw):
+    """Decode one JSON document with the shared duplicate-key/number contract."""
+    def invalid(value): raise ValueError('non-finite JSON number: '+value)
+    return json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
+
 def load(path):
     raw=Path(path).read_bytes()
     if len(raw)>8_000_000: raise ValueError('input exceeds 8 MB')
-    def invalid(value): raise ValueError('non-finite JSON number: '+value)
-    return json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
+    return loads(raw)
 
 def fields(obj,names):
     if not isinstance(obj,dict) or set(obj)!=set(names.split()):

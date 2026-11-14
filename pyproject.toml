@@ -10,5 +10,6 @@ dependencies = []
 [project.scripts]
 address-link = "address_link.cli:main"
 address-history = "address_link.history_cli:main"
+delivery-facts = "address_link.delivery_cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
